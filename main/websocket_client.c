@@ -13,6 +13,8 @@
 #include <mbedtls/base64.h>
 #include <string.h>
 
+// #define LOG_DEBUG
+
 static const char *TAG = "WEBSOCKET_CLIENT";
 
 // LCD configuration - same as in lcd_tjpgd_example_main.c
@@ -110,8 +112,10 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
             break;
             
         case WEBSOCKET_EVENT_DATA:
+#if LOG_DEBUG
             ESP_LOGI(TAG, "WEBSOCKET_EVENT_DATA");
             ESP_LOGI(TAG, "Received chunk: data_len=%ld payload_len=%ld offset=%ld", (long)data->data_len, (long)data->payload_len, (long)data->payload_offset);
+#endif
 
             if (data->data_len > 0) {
                 // Allocate big enough buffer at the start of a frame
@@ -145,19 +149,24 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
                     char debug_str[65];
                     memcpy(debug_str, accumulated_data, 64);
                     debug_str[64] = '\0';
+#if LOG_DEBUG
                     ESP_LOGI(TAG, "First 64 chars: %s", debug_str);
-
+#endif
                     char debug_end[33];
                     size_t end_len = 32;
                     memcpy(debug_end, accumulated_data + accumulated_len - end_len, end_len);
                     debug_end[end_len] = '\0';
+#if LOG_DEBUG
                     ESP_LOGI(TAG, "Last %zu chars: %s", end_len, debug_end);
+#endif
                 }
 
                 // If received all bytes of the frame, process
                 if (accumulated_expected_len > 0 && accumulated_len == accumulated_expected_len) {
                     accumulated_data[accumulated_len] = '\0';
+#if LOG_DEBUG
                     ESP_LOGI(TAG, "Complete base64 frame received, length: %zu", accumulated_len);
+#endif
 
                     uint8_t *jpeg_data = NULL;
                     size_t jpeg_len = 0;
@@ -336,11 +345,15 @@ esp_err_t decode_base64_image(const char* base64_data, size_t data_len, uint8_t*
         return ESP_FAIL;
     }
 
+#if LOG_DEBUG
     ESP_LOGI(TAG, "Attempting to decode base64 data, length: %zu", data_len);
+#endif
     
     // Validate base64 data (should only contain A-Z, a-z, 0-9, +, /, =)
     // Skip validation for now to see what data we're actually receiving
+#if LOG_DEBUG
     ESP_LOGI(TAG, "Base64 data validation skipped for debugging");
+#endif
 
     // Calculate decoded size using mbedTLS. Passing NULL buffer is expected to return
     // MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL and set decoded_len to the required size.
@@ -371,8 +384,9 @@ esp_err_t decode_base64_image(const char* base64_data, size_t data_len, uint8_t*
     }
 
     *jpeg_len = decoded_len;
+#if LOG_DEBUG
     ESP_LOGI(TAG, "Base64 decoded successfully, JPEG size: %zu", decoded_len);
-    
+#endif
     xSemaphoreGive(image_mutex);
     return ESP_OK;
 }
@@ -398,7 +412,9 @@ esp_err_t display_jpeg_on_lcd(const uint8_t* jpeg_data, size_t jpeg_len)
 
     // Allocate memory for decoded pixels sized exactly to the image
     size_t required_bytes = (size_t)jpeg_w * (size_t)jpeg_h * sizeof(uint16_t);
+#if LOG_DEBUG
     ESP_LOGI(TAG, "Required bytes: %zu", required_bytes);
+#endif
     uint16_t *pixels = heap_caps_malloc(required_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (pixels == NULL) {
         pixels = heap_caps_malloc(required_bytes, MALLOC_CAP_8BIT);
@@ -431,9 +447,9 @@ esp_err_t display_jpeg_on_lcd(const uint8_t* jpeg_data, size_t jpeg_len)
         xSemaphoreGive(image_mutex);
         return ret;
     }
-
+#if LOG_DEBUG
     ESP_LOGI(TAG, "JPEG decoded successfully: %ldx%ld", (long)outimg.width, (long)outimg.height);
-
+#endif
     // Display on LCD, crop if decoded image is larger than panel
     int draw_w = (outimg.width  > EXAMPLE_LCD_H_RES) ? EXAMPLE_LCD_H_RES : outimg.width;
     int draw_h = (outimg.height > EXAMPLE_LCD_V_RES) ? EXAMPLE_LCD_V_RES : outimg.height;
@@ -453,11 +469,7 @@ esp_err_t find_camera_server_ip(char* ip_buffer, size_t buffer_size)
 {
     // Try common ESP32-CAM IP addresses
     const char* common_ips[] = {
-        "192.168.1.93",
-        "192.168.4.1",    // ESP32-CAM AP mode
-        "192.168.1.101",
-        "192.168.1.102",
-        "192.168.1.103"
+        "192.168.1.93"
     };
     
     for (int i = 0; i < sizeof(common_ips) / sizeof(common_ips[0]); i++) {
