@@ -28,6 +28,15 @@ void app_main(void)
 
     ESP_LOGI(TAG, "WiFi connected successfully!");
 
+    // Initialize GPIO for mode detection FIRST
+    ret = init_mode_detection_gpio();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize mode detection GPIO");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Mode detection GPIO initialized successfully!");
+
     // Initialize LCD display
     ret = init_lcd_display();
     if (ret != ESP_OK) {
@@ -37,17 +46,20 @@ void app_main(void)
 
     ESP_LOGI(TAG, "LCD display initialized successfully!");
 
-    // Initialize WebSocket client
-    ret = init_websocket_client();
+    // Initialize image mutex (needed for LCD operations)
+    ret = init_image_mutex();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize WebSocket client");
+        ESP_LOGE(TAG, "Failed to initialize image mutex");
         return;
     }
 
-    ESP_LOGI(TAG, "WebSocket client initialized successfully!");
+    ESP_LOGI(TAG, "Image mutex initialized successfully!");
 
-    // Create WebSocket client task
-    xTaskCreate(websocket_client_task, "websocket_client_task", 4096, NULL, 5, NULL);
+    // Don't initialize WebSocket client here - will be done based on mode
+    ESP_LOGI(TAG, "WebSocket client will be initialized based on mode");
+
+    // Create mode management task (GPIO already initialized)
+    xTaskCreate(websocket_client_task, "mode_management_task", 4096, NULL, 5, NULL);
 
     ESP_LOGI(TAG, "WebSocket LCD client started successfully");
     

@@ -38,6 +38,59 @@ static const char *TAG = "WEBSOCKET_CLIENT";
 #define MAX_DECODED_W 320
 #define MAX_DECODED_H 240
 
+// Simple 8x8 bitmap font for basic text display
+// Each character is 8x8 pixels, stored as 8 bytes (1 byte per row)
+static const uint8_t simple_font[128][8] = {
+    // Space (32)
+    [32] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    // A (65)
+    [65] = {0x10, 0x28, 0x44, 0x44, 0x7C, 0x44, 0x44, 0x44},
+    // D (68) 
+    [68] = {0x78, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x78},
+    // E (69)
+    [69] = {0x7C, 0x40, 0x40, 0x78, 0x40, 0x40, 0x40, 0x7C},
+    // L (76)
+    [76] = {0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x7C},
+    // M (77)
+    [77] = {0x44, 0x6C, 0x54, 0x44, 0x44, 0x44, 0x44, 0x44},
+    // N (78)
+    [78] = {0x44, 0x64, 0x54, 0x4C, 0x44, 0x44, 0x44, 0x44},
+    // O (79)
+    [79] = {0x38, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x38},
+    // P (80)
+    [80] = {0x78, 0x44, 0x44, 0x78, 0x40, 0x40, 0x40, 0x40},
+    // S (83)
+    [83] = {0x38, 0x44, 0x40, 0x38, 0x04, 0x04, 0x44, 0x38},
+    // V (86)
+    [86] = {0x82, 0x82, 0x82, 0x44, 0x44, 0x28, 0x28, 0x10},
+    // a (97)
+    [97] = {0x00, 0x00, 0x38, 0x04, 0x3C, 0x44, 0x44, 0x3C},
+    // g (103)
+    [103] = {0x00, 0x00, 0x3C, 0x44, 0x44, 0x3C, 0x04, 0x38},
+    // h (104)
+    [104] = {0x80, 0x80, 0xB8, 0xC4, 0x84, 0x84, 0x84, 0x84},
+    // i (105)
+    [105] = {0x10, 0x00, 0x30, 0x10, 0x10, 0x10, 0x10, 0x38},
+    // k (107)
+    [107] = {0x40, 0x40, 0x48, 0x50, 0x60, 0x50, 0x48, 0x44},
+    // l (108)
+    [108] = {0x30, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x38},
+    // m (109)
+    [109] = {0x00, 0x00, 0xD8, 0xA4, 0xA4, 0xA4, 0xA4, 0xA4},
+    // n (110)
+    [110] = {0x00, 0x00, 0x78, 0x84, 0x84, 0x84, 0x84, 0x84},
+    // o (111)
+    [111] = {0x00, 0x00, 0x38, 0x44, 0x44, 0x44, 0x44, 0x38},
+    // p (112)
+    [112] = {0x00, 0x00, 0x78, 0x44, 0x44, 0x78, 0x40, 0x40},
+    // t (116)
+    [116] = {0x20, 0x20, 0xF8, 0x20, 0x20, 0x20, 0x20, 0x18},
+    // u (117) 
+    [117] = {0x00, 0x00, 0x84, 0x84, 0x84, 0x84, 0x84, 0x78},
+    // Simple fallback for other chars
+    [0] = {0x7E, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x7E}  // Rectangle for unknown chars
+};
+
 // Global variables
 static esp_websocket_client_handle_t client;
 static esp_lcd_panel_handle_t panel_handle;
@@ -47,6 +100,10 @@ static size_t accumulated_len = 0;
 static size_t accumulated_capacity = 0;
 static size_t accumulated_expected_len = 0;
 static TickType_t last_data_time = 0;
+
+// Mode detection variables
+static display_mode_t current_mode = MODE_IMAGE_STREAM;
+static bool websocket_streaming = false;
 
 // Parse JPEG width/height from SOF0/SOF2 marker to size output buffer precisely
 static bool parse_jpeg_size(const uint8_t *jpeg, size_t len, uint16_t *out_w, uint16_t *out_h)
@@ -95,12 +152,18 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
     switch (event_id) {
         case WEBSOCKET_EVENT_CONNECTED:
             ESP_LOGI(TAG, "WEBSOCKET_EVENT_CONNECTED");
-            // Send "capture" message to start streaming
-            int ret = esp_websocket_client_send_text(client, "capture", strlen("capture"), portMAX_DELAY);
-            if (ret < 0) {
-                ESP_LOGE(TAG, "Failed to send capture message");
+            // Send "capture" message to start streaming only if in IMAGE_STREAM mode
+            if (current_mode == MODE_IMAGE_STREAM) {
+                int ret = esp_websocket_client_send_text(client, "capture", strlen("capture"), portMAX_DELAY);
+                if (ret < 0) {
+                    ESP_LOGE(TAG, "Failed to send capture message");
+                } else {
+                    ESP_LOGI(TAG, "Capture message sent successfully - streaming started");
+                    websocket_streaming = true;
+                }
             } else {
-                ESP_LOGI(TAG, "Capture message sent successfully - streaming started");
+                ESP_LOGI(TAG, "Connected but not starting streaming (mode: %d)", current_mode);
+                websocket_streaming = false;
             }
             break;
             
@@ -117,7 +180,8 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
             ESP_LOGI(TAG, "Received chunk: data_len=%ld payload_len=%ld offset=%ld", (long)data->data_len, (long)data->payload_len, (long)data->payload_offset);
 #endif
 
-            if (data->data_len > 0) {
+            // Only process image data if we're in IMAGE_STREAM mode
+            if (data->data_len > 0 && current_mode == MODE_IMAGE_STREAM) {
                 // Allocate big enough buffer at the start of a frame
                 if (data->payload_offset == 0) {
                     accumulated_expected_len = data->payload_len;
@@ -254,12 +318,24 @@ esp_err_t init_lcd_display(void)
     return ESP_OK;
 }
 
-esp_err_t init_websocket_client(void)
+esp_err_t init_image_mutex(void)
 {
     // Create mutex for image processing
     image_mutex = xSemaphoreCreateMutex();
     if (image_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create mutex");
+        ESP_LOGE(TAG, "Failed to create image mutex");
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "Image mutex created successfully");
+    return ESP_OK;
+}
+
+esp_err_t init_websocket_client(void)
+{
+    // Mutex should already be created
+    if (image_mutex == NULL) {
+        ESP_LOGE(TAG, "Image mutex not initialized");
         return ESP_FAIL;
     }
 
@@ -513,8 +589,226 @@ void websocket_client_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "WebSocket client task started");
     
+    // Wait a bit to ensure all initializations are complete
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
+    display_mode_t previous_mode = get_current_mode();
+    ESP_LOGI(TAG, "Initial mode detected: %d", previous_mode);
+    
+    // Handle initial mode
+    handle_mode_change(previous_mode);
+    
     while (1) {
-        // Keep the task alive - no need to send capture repeatedly
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Check for mode changes
+        display_mode_t new_mode = get_current_mode();
+        if (new_mode != previous_mode) {
+            ESP_LOGI(TAG, "Mode changed from %d to %d", previous_mode, new_mode);
+            handle_mode_change(new_mode);
+            previous_mode = new_mode;
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(100)); // Check mode every 100ms
+    }
+}
+
+// Initialize GPIO for mode detection
+esp_err_t init_mode_detection_gpio(void)
+{
+    gpio_config_t gpio_cfg = {
+        .pin_bit_mask = (1ULL << MODE_DETECT_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,  // Enable pull-up resistor
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    
+    esp_err_t ret = gpio_config(&gpio_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure mode detection GPIO");
+        return ret;
+    }
+    
+    ESP_LOGI(TAG, "Mode detection GPIO %d initialized successfully", MODE_DETECT_GPIO);
+    return ESP_OK;
+}
+
+// Get current mode based on GPIO state
+display_mode_t get_current_mode(void)
+{
+    int gpio_level = gpio_get_level(MODE_DETECT_GPIO);
+    ESP_LOGD(TAG, "GPIO %d level: %d", MODE_DETECT_GPIO, gpio_level);
+    return (gpio_level == 0) ? MODE_IMAGE_STREAM : MODE_PASSWORD_PROMPT;
+}
+
+// Draw a single character on screen buffer
+static void draw_char_on_buffer(uint16_t *buffer, int x, int y, char c, uint16_t color)
+{
+    if (x < 0 || y < 0 || x + 8 > EXAMPLE_LCD_H_RES || y + 8 > EXAMPLE_LCD_V_RES) {
+        return; // Out of bounds
+    }
+    
+    // Get character bitmap (use fallback for unknown chars)
+    const uint8_t *char_bitmap = (c >= 0 && c < 128) ? simple_font[(int)c] : simple_font[0];
+    
+    // Draw 8x8 character
+    for (int row = 0; row < 8; row++) {
+        uint8_t bitmap_row = char_bitmap[row];
+        for (int col = 0; col < 8; col++) {
+            if (bitmap_row & (0x80 >> col)) { // Check if pixel should be on
+                int pixel_x = x + col;
+                int pixel_y = y + row;
+                buffer[pixel_y * EXAMPLE_LCD_H_RES + pixel_x] = color;
+            }
+        }
+    }
+}
+
+// Display text message on LCD
+esp_err_t display_text_on_lcd(const char* text)
+{
+    if (xSemaphoreTake(image_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to take mutex for text display");
+        return ESP_FAIL;
+    }
+
+    // Clear the screen first (fill with dark blue background)
+    size_t screen_size = EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES * sizeof(uint16_t);
+    uint16_t *screen_buffer = malloc(screen_size);
+    if (screen_buffer == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate screen buffer for text display");
+        xSemaphoreGive(image_mutex);
+        return ESP_ERR_NO_MEM;
+    }
+    
+    // Fill screen with dark blue (0x001F in RGB565 - pure blue)
+    uint16_t bg_color = 0x001F; // Dark blue background
+    for (int i = 0; i < EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES; i++) {
+        screen_buffer[i] = bg_color;
+    }
+    
+    // Text display parameters
+    uint16_t text_color = 0xFFFF; // White text
+    int start_x = 40; // Start position X (centered-ish)
+    int start_y = 100; // Start position Y (middle of screen)
+    int char_spacing = 10; // Space between characters
+    
+    // Draw each character
+    int x = start_x;
+    int y = start_y;
+    for (int i = 0; text[i] != '\0' && i < 30; i++) { // Limit to 30 chars
+        char c = text[i];
+        
+        if (c == ' ') {
+            x += char_spacing; // Space character
+        } else if (c == '\n' || x + 8 >= EXAMPLE_LCD_H_RES - 10) {
+            // New line or end of screen width
+            x = start_x;
+            y += 12; // Move to next line (8 pixel height + 4 pixel spacing)
+            if (y + 8 >= EXAMPLE_LCD_V_RES) break; // Screen full
+            if (c != '\n') {
+                draw_char_on_buffer(screen_buffer, x, y, c, text_color);
+                x += char_spacing;
+            }
+        } else {
+            draw_char_on_buffer(screen_buffer, x, y, c, text_color);
+            x += char_spacing;
+        }
+    }
+    
+    // Draw the screen buffer to LCD
+    esp_err_t ret = esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, screen_buffer);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to draw text to LCD screen");
+        free(screen_buffer);
+        xSemaphoreGive(image_mutex);
+        return ret;
+    }
+    
+    free(screen_buffer);
+    ESP_LOGI(TAG, "Text displayed on LCD: %s", text);
+    
+    xSemaphoreGive(image_mutex);
+    return ESP_OK;
+}
+
+// Start WebSocket client dynamically
+esp_err_t start_websocket_client(void)
+{
+    if (client != NULL) {
+        ESP_LOGI(TAG, "WebSocket client already initialized");
+        return ESP_OK;
+    }
+    
+    ESP_LOGI(TAG, "Starting WebSocket client...");
+    return init_websocket_client();
+}
+
+// Stop WebSocket client and cleanup
+void stop_websocket_client(void)
+{
+    if (client != NULL) {
+        ESP_LOGI(TAG, "Stopping WebSocket client...");
+        esp_websocket_client_stop(client);
+        esp_websocket_client_destroy(client);
+        client = NULL;
+        websocket_streaming = false;
+        
+        // Reset accumulated data
+        accumulated_len = 0;
+        accumulated_expected_len = 0;
+        
+        ESP_LOGI(TAG, "WebSocket client stopped and cleaned up");
+    } else {
+        ESP_LOGI(TAG, "WebSocket client already stopped");
+    }
+}
+
+// Handle mode changes
+void handle_mode_change(display_mode_t new_mode)
+{
+    ESP_LOGI(TAG, "Handling mode change to: %d", new_mode);
+    current_mode = new_mode;
+    
+    switch (new_mode) {
+        case MODE_IMAGE_STREAM:
+            ESP_LOGI(TAG, "Switching to IMAGE STREAM mode");
+            
+            // Start WebSocket client if not running
+            if (client == NULL) {
+                esp_err_t ret = start_websocket_client();
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to start WebSocket client");
+                    return;
+                }
+            }
+            
+            // Start streaming if connected
+            if (client != NULL && esp_websocket_client_is_connected(client) && !websocket_streaming) {
+                int ret = esp_websocket_client_send_text(client, "capture", strlen("capture"), portMAX_DELAY);
+                if (ret >= 0) {
+                    websocket_streaming = true;
+                    ESP_LOGI(TAG, "Started websocket image streaming");
+                } else {
+                    ESP_LOGE(TAG, "Failed to start websocket streaming, ret=%d", ret);
+                }
+            }
+            break;
+            
+        case MODE_PASSWORD_PROMPT:
+            ESP_LOGI(TAG, "Switching to PASSWORD PROMPT mode");
+            
+            // Stop and cleanup WebSocket client completely
+            stop_websocket_client();
+            
+            // Display password prompt (using simple text for better font support)
+            esp_err_t display_ret = display_text_on_lcd("PASSWORD MODE");
+            if (display_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to display password prompt");
+            }
+            break;
+            
+        default:
+            ESP_LOGW(TAG, "Unknown mode: %d", new_mode);
+            break;
     }
 } 
