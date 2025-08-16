@@ -15,6 +15,26 @@
 
 // #define LOG_DEBUG
 
+// Keypad 4x3
+#define ROWS 4
+#define COLS 4
+
+int rowPins[ROWS] = { 13, 12, 11, 18 };
+int colPins[COLS] = { 2, 4, 16, 17 };
+
+char keys[ROWS][COLS] = {
+    {'1','2','3','A'},
+    {'4','5','6','B'},
+    {'7','8','9','C'},
+    {'*','0','#','D'}
+};
+
+// Mật khẩu
+#define MAX_PASSWORD_LENGTH 6
+char input_password[MAX_PASSWORD_LENGTH + 1];
+int input_index = 0;
+const char correct_password[] = "1234"; // mật khẩu đúng
+
 static const char *TAG = "WEBSOCKET_CLIENT";
 
 // LCD configuration - same as in lcd_tjpgd_example_main.c
@@ -49,6 +69,8 @@ static const uint8_t simple_font[128][8] = {
     [68] = {0x78, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x78},
     // E (69)
     [69] = {0x7C, 0x40, 0x40, 0x78, 0x40, 0x40, 0x40, 0x7C},
+    // C (67)
+    [67] = {0x38, 0x44, 0x40, 0x40, 0x40, 0x40, 0x44, 0x38},
     // L (76)
     [76] = {0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x7C},
     // M (77)
@@ -61,8 +83,12 @@ static const uint8_t simple_font[128][8] = {
     [80] = {0x78, 0x44, 0x44, 0x78, 0x40, 0x40, 0x40, 0x40},
     // S (83)
     [83] = {0x38, 0x44, 0x40, 0x38, 0x04, 0x04, 0x44, 0x38},
+    // R (82)
+    [82] = {0x78, 0x44, 0x44, 0x78, 0x50, 0x48, 0x44, 0x44},
     // V (86)
     [86] = {0x82, 0x82, 0x82, 0x44, 0x44, 0x28, 0x28, 0x10},
+    // W (87)
+    [87] = {0x82, 0x82, 0x82, 0x92, 0x92, 0x92, 0xAA, 0x44},
     // a (97)
     [97] = {0x00, 0x00, 0x38, 0x04, 0x3C, 0x44, 0x44, 0x3C},
     // g (103)
@@ -87,6 +113,18 @@ static const uint8_t simple_font[128][8] = {
     [116] = {0x20, 0x20, 0xF8, 0x20, 0x20, 0x20, 0x20, 0x18},
     // u (117) 
     [117] = {0x00, 0x00, 0x84, 0x84, 0x84, 0x84, 0x84, 0x78},
+    // r (114)
+    [114] = {0x00, 0x00, 0x58, 0x64, 0x40, 0x40, 0x40, 0x40},
+    // d (100) 
+    [100] = {0x04, 0x04, 0x3C, 0x44, 0x44, 0x44, 0x44, 0x3C},
+    // e (101)
+    [101] = {0x00, 0x00, 0x38, 0x44, 0x7C, 0x40, 0x44, 0x38},
+    // s (115)
+    [115] = {0x00, 0x00, 0x38, 0x40, 0x38, 0x04, 0x44, 0x38},
+    // w (119)
+    [119] = {0x00, 0x00, 0x82, 0x92, 0x92, 0xAA, 0xAA, 0x44},
+    // c (99)
+    [99] = {0x00, 0x00, 0x38, 0x44, 0x40, 0x40, 0x44, 0x38},
     // Simple fallback for other chars
     [0] = {0x7E, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x7E}  // Rectangle for unknown chars
 };
@@ -104,6 +142,105 @@ static TickType_t last_data_time = 0;
 // Mode detection variables
 static display_mode_t current_mode = MODE_IMAGE_STREAM;
 static bool websocket_streaming = false;
+
+void keypad_scan_continuous() {
+    ESP_LOGI(TAG, "Keypad continuous scanning started");
+    
+    while (current_mode == MODE_PASSWORD_PROMPT) {
+        bool key_pressed = false;
+        
+        for (int c = 0; c < COLS; c++) {
+            gpio_set_level(colPins[c], 0);
+            vTaskDelay(pdMS_TO_TICKS(1)); // Small delay for GPIO settling
+            
+            for (int r = 0; r < ROWS; r++) {
+                if (gpio_get_level(rowPins[r]) == 0) {
+                    char key = keys[r][c];
+                    ESP_LOGI(TAG, "Key pressed: %c", key);
+                    key_pressed = true;
+
+                    if (key == '#') { // Enter
+                        input_password[input_index] = '\0';
+                        if (strcmp(input_password, correct_password) == 0) {
+                            ESP_LOGI(TAG, "✅ Password correct!");
+                        } else {
+                            ESP_LOGI(TAG, "❌ Password incorrect!");
+                        }
+                        input_index = 0;
+                    }
+                    else if (key == '*') { // Xóa
+                        if (input_index > 0) input_index--;
+                        ESP_LOGI(TAG, "Deleted. Current input length: %d", input_index);
+                    }
+                    else {
+                        if (input_index < MAX_PASSWORD_LENGTH) {
+                            input_password[input_index++] = key;
+                            ESP_LOGI(TAG, "Added key. Current input length: %d", input_index);
+                        }
+                    }
+
+                    // Wait for key release
+                    while (gpio_get_level(rowPins[r]) == 0 && current_mode == MODE_PASSWORD_PROMPT) {
+                        vTaskDelay(pdMS_TO_TICKS(10));
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(100)); // Additional debounce
+                }
+            }
+            gpio_set_level(colPins[c], 1);
+        }
+        
+        if (!key_pressed) {
+            vTaskDelay(pdMS_TO_TICKS(50)); // Scan rate when no key pressed
+        }
+    }
+    ESP_LOGI(TAG, "Keypad scanning stopped - mode changed");
+}
+
+// Legacy function for compatibility
+void keypad_scan() {
+    ESP_LOGI(TAG, "Single keypad scan");
+    for (int c = 0; c < COLS; c++) {
+        gpio_set_level(colPins[c], 0);
+        vTaskDelay(pdMS_TO_TICKS(1));
+        
+        for (int r = 0; r < ROWS; r++) {
+            if (gpio_get_level(rowPins[r]) == 0) {
+                char key = keys[r][c];
+                ESP_LOGI(TAG, "Key pressed: %c", key);
+                return; // Exit after first key
+            }
+        }
+        gpio_set_level(colPins[c], 1);
+    }
+}
+
+// Debug function to check GPIO states
+void debug_gpio_states() {
+    ESP_LOGI(TAG, "=== GPIO Debug Info ===");
+    ESP_LOGI(TAG, "Row pins (should be HIGH when not pressed):");
+    for (int r = 0; r < ROWS; r++) {
+        int level = gpio_get_level(rowPins[r]);
+        ESP_LOGI(TAG, "  Row[%d] GPIO%d: %d", r, rowPins[r], level);
+    }
+    ESP_LOGI(TAG, "Col pins (set individually during scan):");
+    for (int c = 0; c < COLS; c++) {
+        int level = gpio_get_level(colPins[c]);
+        ESP_LOGI(TAG, "  Col[%d] GPIO%d: %d", c, colPins[c], level);
+    }
+    ESP_LOGI(TAG, "=====================");
+}
+
+// Keypad task for continuous scanning
+void keypad_task(void *pvParameters) {
+    ESP_LOGI(TAG, "Keypad task started");
+    
+    // Debug initial GPIO states
+    // debug_gpio_states();
+    
+    keypad_scan_continuous();
+    ESP_LOGI(TAG, "Keypad task ended");
+    vTaskDelete(NULL);
+}
 
 // Parse JPEG width/height from SOF0/SOF2 marker to size output buffer precisely
 static bool parse_jpeg_size(const uint8_t *jpeg, size_t len, uint16_t *out_w, uint16_t *out_h)
@@ -310,9 +447,6 @@ esp_err_t init_lcd_display(void)
 
     // Ensure backlight is ON
     ESP_ERROR_CHECK(gpio_set_level(EXAMPLE_PIN_NUM_BK_LIGHT, EXAMPLE_LCD_BK_LIGHT_ON_LEVEL));
-
-    // Don't initialize pretty effect for websocket client
-    // ESP_ERROR_CHECK(pretty_effect_init());
 
     ESP_LOGI(TAG, "LCD display initialized successfully");
     return ESP_OK;
@@ -592,6 +726,42 @@ void websocket_client_task(void *pvParameters)
     // Wait a bit to ensure all initializations are complete
     vTaskDelay(pdMS_TO_TICKS(500));
     
+    // Setup keypad - improved GPIO configuration
+    for (int r = 0; r < ROWS; r++) {
+        gpio_config_t row_config = {
+            .pin_bit_mask = (1ULL << rowPins[r]),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE
+        };
+        esp_err_t ret = gpio_config(&row_config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to configure row pin %d: %s", rowPins[r], esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "Row pin %d configured successfully", rowPins[r]);
+        }
+    }
+    
+    for (int c = 0; c < COLS; c++) {
+        gpio_config_t col_config = {
+            .pin_bit_mask = (1ULL << colPins[c]),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE
+        };
+        esp_err_t ret = gpio_config(&col_config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to configure col pin %d: %s", colPins[c], esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "Col pin %d configured successfully", colPins[c]);
+        }
+        gpio_set_level(colPins[c], 1); // Set all columns HIGH initially
+    }
+
+    ESP_LOGI(TAG, "Keypad system started");
+
     display_mode_t previous_mode = get_current_mode();
     ESP_LOGI(TAG, "Initial mode detected: %d", previous_mode);
     
@@ -640,7 +810,7 @@ display_mode_t get_current_mode(void)
     return (gpio_level == 0) ? MODE_IMAGE_STREAM : MODE_PASSWORD_PROMPT;
 }
 
-// Draw a single character on screen buffer
+// Draw a single character on screen buffer (8x8 normal size)
 static void draw_char_on_buffer(uint16_t *buffer, int x, int y, char c, uint16_t color)
 {
     if (x < 0 || y < 0 || x + 8 > EXAMPLE_LCD_H_RES || y + 8 > EXAMPLE_LCD_V_RES) {
@@ -652,12 +822,40 @@ static void draw_char_on_buffer(uint16_t *buffer, int x, int y, char c, uint16_t
     
     // Draw 8x8 character
     for (int row = 0; row < 8; row++) {
-        uint8_t bitmap_row = char_bitmap[row];
+        uint8_t bitmap_row = char_bitmap[7 - row]; // Flip vertically 
         for (int col = 0; col < 8; col++) {
-            if (bitmap_row & (0x80 >> col)) { // Check if pixel should be on
+            if (bitmap_row & (0x80 >> col)) { // Normal bit order
                 int pixel_x = x + col;
                 int pixel_y = y + row;
                 buffer[pixel_y * EXAMPLE_LCD_H_RES + pixel_x] = color;
+            }
+        }
+    }
+}
+
+// Draw a single character on screen buffer (16x16 double size)
+static void draw_char_large_on_buffer(uint16_t *buffer, int x, int y, char c, uint16_t color)
+{
+    if (x < 0 || y < 0 || x + 16 > EXAMPLE_LCD_H_RES || y + 16 > EXAMPLE_LCD_V_RES) {
+        return; // Out of bounds
+    }
+    
+    // Get character bitmap (use fallback for unknown chars)
+    const uint8_t *char_bitmap = (c >= 0 && c < 128) ? simple_font[(int)c] : simple_font[0];
+    
+    // Draw 16x16 character (each 8x8 pixel becomes 2x2 pixels)
+    for (int row = 0; row < 8; row++) {
+        uint8_t bitmap_row = char_bitmap[7 - row]; // Flip vertically 
+        for (int col = 0; col < 8; col++) {
+            if (bitmap_row & (0x80 >> col)) { // Normal bit order
+                // Draw 2x2 block for each original pixel
+                for (int dy = 0; dy < 2; dy++) {
+                    for (int dx = 0; dx < 2; dx++) {
+                        int pixel_x = x + (col * 2) + dx;
+                        int pixel_y = y + (row * 2) + dy;
+                        buffer[pixel_y * EXAMPLE_LCD_H_RES + pixel_x] = color;
+                    }
+                }
             }
         }
     }
@@ -686,33 +884,43 @@ esp_err_t display_text_on_lcd(const char* text)
         screen_buffer[i] = bg_color;
     }
     
-    // Text display parameters
+    // Text display parameters for large text (16x16 characters)
     uint16_t text_color = 0xFFFF; // White text
-    int start_x = 40; // Start position X (centered-ish)
-    int start_y = 100; // Start position Y (middle of screen)
-    int char_spacing = 10; // Space between characters
+    int char_spacing = 18; // Space between characters (16 + 2 spacing)
+    int line_height = 22; // Height between lines (16 + 6 spacing)
     
-    // Draw each character
-    int x = start_x;
+    // Calculate text centering for "Please enter" (12 chars)
+    int line1_width = 12 * char_spacing; // "Please enter" 
+    int line2_width = 8 * char_spacing;  // "password"
+    int start_x_line1 = (EXAMPLE_LCD_H_RES - line1_width) / 2;
+    int start_x_line2 = (EXAMPLE_LCD_H_RES - line2_width) / 2;
+    int start_y = (EXAMPLE_LCD_V_RES - (2 * 16 + line_height)) / 2; // Center vertically
+    
+    // Draw text manually with proper centering
+    // Line 1: "Please enter"
+    const char* line1 = "Please enter";
+    int x = start_x_line1;
     int y = start_y;
-    for (int i = 0; text[i] != '\0' && i < 30; i++) { // Limit to 30 chars
-        char c = text[i];
-        
+    
+    for (int i = 0; line1[i] != '\0'; i++) {
+        char c = line1[i];
         if (c == ' ') {
             x += char_spacing; // Space character
-        } else if (c == '\n' || x + 8 >= EXAMPLE_LCD_H_RES - 10) {
-            // New line or end of screen width
-            x = start_x;
-            y += 12; // Move to next line (8 pixel height + 4 pixel spacing)
-            if (y + 8 >= EXAMPLE_LCD_V_RES) break; // Screen full
-            if (c != '\n') {
-                draw_char_on_buffer(screen_buffer, x, y, c, text_color);
-                x += char_spacing;
-            }
         } else {
-            draw_char_on_buffer(screen_buffer, x, y, c, text_color);
+            draw_char_large_on_buffer(screen_buffer, x, y, c, text_color);
             x += char_spacing;
         }
+    }
+    
+    // Line 2: "password"
+    const char* line2 = "password";
+    x = start_x_line2;
+    y -= line_height;
+    
+    for (int i = 0; line2[i] != '\0'; i++) {
+        char c = line2[i];
+        draw_char_large_on_buffer(screen_buffer, x, y, c, text_color);
+        x += char_spacing;
     }
     
     // Draw the screen buffer to LCD
@@ -800,11 +1008,14 @@ void handle_mode_change(display_mode_t new_mode)
             // Stop and cleanup WebSocket client completely
             stop_websocket_client();
             
-            // Display password prompt (using simple text for better font support)
-            esp_err_t display_ret = display_text_on_lcd("PASSWORD MODE");
+            // Display password prompt (centered text)
+            esp_err_t display_ret = display_text_on_lcd("");
             if (display_ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to display password prompt");
             }
+            
+            // Start continuous keypad scanning in a separate task
+            xTaskCreate(keypad_task, "keypad_task", 4096, NULL, 5, NULL);
             break;
             
         default:

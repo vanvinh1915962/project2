@@ -63,9 +63,9 @@ void app_main(void)
 
     ESP_LOGI(TAG, "WebSocket LCD client started successfully");
     
-    // Keep main task alive
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(10000)); // Check every 10 seconds
-        ESP_LOGI(TAG, "WebSocket LCD client is running...");
-    }
+    // // Keep main task alive
+    // while (1) {
+    //     vTaskDelay(pdMS_TO_TICKS(10000)); // Check every 10 seconds
+    //     ESP_LOGI(TAG, "WebSocket LCD client is running...");
+    // }
 } 
